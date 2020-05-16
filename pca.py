@@ -10,7 +10,7 @@ gencode_names = pd.read_csv('gencode.v22.genes.txt', sep='\t')
 gencode_names.set_index('gene_id', inplace=True)
 y_gene_list = gencode_names[gencode_names['seqname'] == 'chrY']
 
-for cancer in ['tgct', 'brca', 'kirc', 'luad', 'ucec', 'thca', 'lusc', 'prad', 'hnsc', 'lgg', 'coad', 'skcm', 'blca', 'lihc', 
+for cancer in ['lihc', 'brca', 'kirc', 'luad', 'ucec', 'thca', 'lusc', 'prad', 'hnsc', 'lgg', 'coad', 'skcm', 'blca', 'lihc', 
                'stad', 'ov', 'kirp', 'cesc', 'sarc', 'pcpg', 'paad', 'read', 'gbm', 'esca', 'tgct', 'laml', 'thym', 
                'kich', 'meso', 'uvm', 'acc', 'ucs', 'dlbc', 'chol']:
 
@@ -25,7 +25,7 @@ for cancer in ['tgct', 'brca', 'kirc', 'luad', 'ucec', 'thca', 'lusc', 'prad', '
                                    'female': int(x in female_sample_list)} 
                                    for x in expression_data.columns]).set_index('index')
     
-    # Remove examples with no sex labelling
+    # # Remove examples with no sex labelling
     d1 = design_matrix.shape[0]
     design_matrix = design_matrix[~((design_matrix['male'] == 0) & (design_matrix['female'] == 0))]
     d2 = design_matrix.shape[0]
@@ -40,7 +40,7 @@ for cancer in ['tgct', 'brca', 'kirc', 'luad', 'ucec', 'thca', 'lusc', 'prad', '
     full_umap_data = full_umap_data_lab.T[full_umap_data_lab.columns.isin(y_gene_list.index)].T
 
     test_df = full_umap_data.join(design_matrix)
-    test_df = test_df[test_df['female'] == 1]
+    test_df = test_df[test_df['male'] == 0]
     test_df = test_df.loc[(test_df > 100).any(axis=1)]
     print(cancer, test_df)
 
@@ -58,7 +58,7 @@ for cancer in ['tgct', 'brca', 'kirc', 'luad', 'ucec', 'thca', 'lusc', 'prad', '
     
     plt.title('umap projection: ' +  cancer)
     plt.legend()
-    plt.colorbar(ticks=[0, 1])
-    plt.show()
+    plt.colorbar(ticks=[0.25, 0.75]).set_ticklabels(['female', 'male'], update_ticks=True)
+    # plt.show()
     # plt.savefig('y_chr_umap_plots/' + cancer + '.png')
     # plt.clf()

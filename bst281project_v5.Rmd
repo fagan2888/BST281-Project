@@ -1,0 +1,433 @@
+
+
+
+```{r deseq}
+library(DESeq2)
+library(dplyr)
+library(edgeR)
+setwd("~/Documents/Harvard/BST281/homework/finalproject")
+
+# chromosome information
+gencode = read.delim('BST281-Project/gencode.v22.genes.txt') %>% select(seqname, gene_id, gene_name)
+Ygenes = gencode %>% dplyr::filter(seqname=='chrY')
+
+# create environment to save all these deseq objects
+rdfc_env = new.env()
+# rdfn_env = new.env()
+
+# defining some cancers to skip (matt already checked these)
+skip_cancers = c('ucec', 'prad', 'ov', 'cesc', 'tgct', 'ucs')
+counter=1
+
+for (i in list.files('BST281-Project/data/merged_rna/', pattern='*.tsv')){
+  # get cancer from the filename
+  cancer = unlist(strsplit(x=i, split='[.]|_'))[3]
+  # keep track of which cancer R is looking at
+  print(paste0('this cancer is: ', cancer))
+  
+  # skip these gendered cancers
+  if(cancer %in% skip_cancers){
+    print(paste0('skipping ', cancer, ',...'))
+    next}
+
+  ## rna sequencing expression data
+  expr_raw = read.table(paste0('/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/merged_rna/merged_rna_',cancer,'.tsv'), header=T, row.names = 1)
+  # removing Ygenes from expression data
+  expr = expr_raw %>% tibble::rownames_to_column('gene_id') %>% 
+    filter(!gene_id %in% Ygenes$gene_id) %>%
+    tibble::column_to_rownames('gene_id')
+  # creating these cpms for plotting
+  cpm = log2(cpm(expr) + 1)
+  # remove genes with low counts, like Camila's paper
+  foo = rowSums(cpm >= 1) >= ceiling(ncol(cpm)/2)
+  ## final list of non-Y chrom genes with high enough counts to use ##
+  genes_keep = cpm[foo,] %>% rownames()
+  
+  
+  ## clinical data - only reading in somme of the rows
+  clin_raw = read.delim(paste0('/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/metadata/metadata.files_',cancer,'.txt'), header=T)
+  
+  # clinical data for cancer samples
+  clin_c = clin_raw %>%
+    dplyr::select(one_of(c('cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id',
+                           'cases.0.demographic.gender', 'cases.0.disease_type', 'cases.0.project.project_id','cases.0.samples.0.sample_type'))) %>%
+    filter(cases.0.demographic.gender %in% c('female', 'male')) %>%
+    filter(cases.0.samples.0.sample_type != 'Solid Tissue Normal') %>%
+    # renaming that column to make it easier to use
+    rename('gender'=cases.0.demographic.gender) %>%
+    # renameing the sample one was well
+    mutate('sample'=gsub('-', '.', cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id))
+  ## final list of samplse with annotations to use ##
+  samples_keep_c = unlist(clin_c$sample)
+  
+  ##final filtration to remove bad genes and samples
+  # cancer 
+  expr_fin_c = expr_raw %>%
+    tibble::rownames_to_column('gene') %>%
+    filter(gene %in% genes_keep) %>% select(one_of('gene', samples_keep_c)) %>%
+    tibble::column_to_rownames('gene')
+  # cpm_fin_c = cpm %>% as.data.frame() %>% tibble::rownames_to_column('gene') %>% filter(gene %in% genes_keep)
+  clin_fin_c = clin_c %>% filter(sample %in% samples_keep_c)
+  
+  
+  #### deseq ####
+  ### cancer
+  # constructing dataset object
+  ddsMat_c = DESeqDataSetFromMatrix(expr_fin_c, DataFrame(clin_fin_c), ~ gender)
+  # run DESEQ function
+  ddsMat_c = DESeq(ddsMat_c)
+  # look at results
+  rdf_c = results(ddsMat_c, contrast = c('gender', 'female', 'male'))
+  assign(paste0(cancer,'_rdf'), rdf_c, envir=rdfc_env)
+  
+  
+  counter=counter+1
+  # if (counter>3){break}
+}
+
+```
+
+
+
+```{r deseqres_save}
+# save(list = ls(rdfc_env),file='../data/noY_filtered_fin.RData', envir=rdfc_env)
+```
+
+
+
+```{r arrange_deseqres}
+# # load the "raw" DESeq results objects
+# raw.env <- new.env()
+# load('noY_filtered.RData', envir=raw.env)
+
+# loading the gencode names for easier googling
+gencode = read.delim('../BST281-Project/gencode.v22.genes.txt') %>% select(seqname, gene_id, gene_name)
+
+# this env is where to save everything
+resc_env = new.env()
+
+for (i in ls(rdfc_env)){
+  # print(i)
+  
+  # temp name for the results S4 object
+  rdf = get(i, envir = rdfc_env)
+  # temp name for the df arranged by padj
+  rdf_arr = rdf %>% data.frame() %>%
+    tibble::rownames_to_column('gene_id') %>%
+    left_join(gencode, by='gene_id') %>%
+    arrange(padj)
+  
+  # assigning final arranged df to environment
+  assign(paste0(i,'arr'), rdf_arr, envir=resc_env)
+  
+  print(paste0(i,'arr'))
+  
+}
+```
+
+
+
+```{r arrange_deseqres_save}
+# save(list = ls(resc_env),file='../data/noY_filtered_rdfarr_fin.RData', envir=resc_env)
+```
+
+```{r concat_deseqres, eval=FALSE}
+# load the arranged dfs of DESeq results
+# test_env = new.env()
+# load('noY_filtered_rdfarr.RData', envir=test_env)
+
+alldat_deseqres = list()
+
+count=1
+for (i in ls(resc_env)){
+  # print(i)
+  cancer = unlist(strsplit(x=i, split='[.]|_'))[1]
+  print(cancer)
+  rdf = get(i, envir = resc_env) %>% mutate(cancer = cancer)
+
+  alldat_deseqres[[count]] = rdf
+  count=count+1
+}
+
+# this is the final df with all statistically significant results from the deseq
+alldat_deseqres = do.call(rbind, alldat_deseqres)
+alldat_deseqres %>% dim()
+# write.csv(alldat_deseqres, file='../data/allDESeqresults_fin.csv')
+
+```
+
+
+
+
+```{r escastad_plotting}
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(gtable)
+allDESeqresults_fin=  read.csv(file='/Users/admin/Documents/Harvard/BST281/homework/finalproject/data/allDESeqresults_fin.csv')
+test = allDESeqresults_fin %>% select(-X) %>% filter(cancer %in% c('esca', 'stad'), padj < 0.05, abs(log2FoldChange) > 1.5) %>%
+  mutate(foldchange=factor(ifelse(log2FoldChange < 0, 'more male', 'more female')))#, levels=c('more_male', 'more_female')) #%>% arrange(desc(log2FoldChange))
+test$foldchange=relevel(test$foldchange, 'more male')
+# esca = test %>% filter(cancer == 'esca')
+# stad = test %>% filter(cancer == 'stad')
+# ggplot(data=test, aes(x=gene_name, y=log2FoldChange, fill=foldchange)) + geom_bar(stat='identity') + coord_flip() + facet_grid(cancer~.)+
+#   scale_fill_manual(values=c('#00BFC4','#F8766D'))
+p1 = ggplot(data=filter(test, cancer == 'esca'), aes(x=gene_name, y=log2FoldChange, fill=foldchange)) + geom_bar(stat='identity') + coord_flip() +
+  ylim(-6,6) + xlab('ESCA') + 
+  scale_fill_manual(values=c('#00BFC4','#F8766D')) + 
+  theme(axis.title.x=element_blank())
+# axis.title.y=element_text('ESCA')
+#axis.title.y = element_blank()) 
+p2 = ggplot(data=filter(test, cancer == 'stad'), aes(x=gene_name, y=log2FoldChange, fill=foldchange)) + geom_bar(stat='identity') + coord_flip() +
+  ylim(-6,6) + xlab('STAD') + 
+  scale_fill_manual(values=c('#00BFC4','#F8766D')) + 
+  theme(axis.title.x = element_blank()) 
+legend = gtable_filter(ggplotGrob(p1), "guide-box")
+m1 = grid.arrange(arrangeGrob(p1 + theme(legend.position="none"), 
+                         p2 + theme(legend.position="none"), 
+                         nrow=2,
+                         # ncol=2,
+                         heights=c(8,2),
+                         top = textGrob("log2FoldChange", vjust = 1, gp = gpar(fontface = "bold", cex = 1.5)),
+                         bottom = textGrob("log2FoldChange", vjust = 1)),
+             legend,
+             widths=unit.c(unit(1, "npc") - legend$width, legend$width), 
+             nrow=1)
+
+# ggsave("escastadtest.pdf", width=10, height=6, m1)
+# ggsave("/Users/admin/Documents/Harvard/BST281/homework/finalproject/escastadtest.png", width=10, height=4, m1)
+```
+
+```{r geneexploration}
+## how many overlaps are there?
+# twoc = 
+allDESeqresults_fin %>%
+  select(-X) %>% 
+  filter(padj < 0.05, abs(log2FoldChange)>1.5, cancer != 'brca') %>% #dim()
+  group_by(gene_name, gene_id) %>% summarise(count=n()) %>%
+  arrange(desc(count)) %>% 
+  filter(count > 1)
+# twoc$gene_name #for the heatmap
+
+# which cancers are these significant in?
+allDESeqresults_fin %>%
+  select(-X) %>% 
+  filter(padj < 0.05, abs(log2FoldChange)>1.5, cancer != 'brca', gene_name %in% c('IGF2', 'NOTUM')) %>% 
+  arrange(gene_name)
+
+# how many in esca and stad?
+allDESeqresults_fin %>% filter(cancer %in% c('esca', 'stad'), padj < 0.05, abs(log2FoldChange) > 1.5) %>% group_by(cancer) %>% summarise(count=n())
+```
+
+
+
+```{r deseq_normalsamples_escastad1}
+library(DESeq2)
+library(dplyr)
+library(edgeR)
+setwd("~/Documents/Harvard/BST281/homework/finalproject")
+
+# chromosome information
+gencode = read.delim('BST281-Project/gencode.v22.genes.txt') %>% select(seqname, gene_id, gene_name)
+Ygenes = gencode %>% dplyr::filter(seqname=='chrY')
+
+# create environment to save all these deseq objects
+rdfn_env = new.env()
+
+# defining some cancers to skip (matt already checked these)
+# skip_cancers = c('ucec', 'prad', 'ov', 'cesc', 'tgct', 'ucs')
+cancers = c('esca', 'stad')
+counter=1
+
+for (i in list.files('BST281-Project/data/merged_rna/', pattern='*.tsv')){
+  # get cancer from the filename
+  cancer = unlist(strsplit(x=i, split='[.]|_'))[3]
+  # keep track of which cancer R is looking at
+  print(paste0('this cancer is: ', cancer))
+  
+  # skip these gendered cancers
+  if(!cancer %in% cancers){
+    print(paste0('skipping ', cancer, ',...'))
+    next}
+  
+  ## rna sequencing expression data
+  expr_raw = read.table(paste0('/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/merged_rna/merged_rna_',cancer,'.tsv'), header=T, row.names = 1)
+  # removing Ygenes from expression data
+  expr = expr_raw %>% tibble::rownames_to_column('gene_id') %>% 
+    filter(!gene_id %in% Ygenes$gene_id) %>%
+    tibble::column_to_rownames('gene_id')
+  # creating these cpms for plotting
+  cpm = log2(cpm(expr) + 1)
+  # remove genes with low counts, like Camila's paper
+  foo = rowSums(cpm >= 1) >= ceiling(ncol(cpm)/2)
+  ## final list of non-Y chrom genes with high enough counts to use ##
+  genes_keep = cpm[foo,] %>% rownames()
+  
+  
+  
+  ## clinical data - only reading in somme of the rows
+  clin_raw = read.delim(paste0('/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/metadata/metadata.files_',cancer,'.txt'), header=T)
+  # clinical data for normal samples
+  clin_n = clin_raw %>%
+    dplyr::select(one_of(c('cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id',
+                           'cases.0.demographic.gender', 'cases.0.disease_type', 'cases.0.project.project_id','cases.0.samples.0.sample_type'))) %>%
+    filter(cases.0.demographic.gender %in% c('female', 'male')) %>%
+    filter(cases.0.samples.0.sample_type == 'Solid Tissue Normal') %>%
+    # renaming that column to make it easier to use
+    rename('gender'=cases.0.demographic.gender) %>%
+    # renameing the sample one was well
+    mutate('sample'=gsub('-', '.', cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id))
+  ## final list of samplse with annotations to use ##
+  samples_keep_n = unlist(clin_n$sample)
+  
+  
+  ##final filtration to remove bad genes and samples
+  # normal
+  expr_fin_n = expr_raw %>%
+    tibble::rownames_to_column('gene') %>%
+    filter(gene %in% genes_keep) %>% select(one_of('gene', samples_keep_n)) %>%
+    tibble::column_to_rownames('gene')
+  # cpm_fin_n = cpm %>% as.data.frame() %>% tibble::rownames_to_column('gene') %>% filter(gene %in% genes_keep)
+  clin_fin_n = clin_n %>% filter(sample %in% samples_keep_n)
+  
+  #### deseq ####
+  ### normal
+  # constructing dataset object
+  ddsMat_n = DESeqDataSetFromMatrix(expr_fin_n, DataFrame(clin_fin_n), ~ gender)
+  # run DESEQ function
+  ddsMat_n = DESeq(ddsMat_n)
+  # look at results
+  rdf_n = results(ddsMat_n, contrast = c('gender', 'female', 'male'))
+  assign(paste0(cancer,'_rdf'), rdf_n, envir=rdfn_env)
+  
+  counter=counter+1
+  # if (counter>3){break}
+}
+
+```
+
+
+```{r deseq_normalsamples_escastad2}
+# gencode = read.delim('../BST281-Project/gencode.v22.genes.txt') %>% select(seqname, gene_id, gene_name)
+
+# this env is where to save everything
+resn_env = new.env()
+
+for (i in ls(rdfn_env)){
+  # print(i)
+  
+  # temp name for the results S4 object
+  rdf = get(i, envir = rdfn_env)
+  # temp name for the df arranged by padj
+  rdf_arr = rdf %>% data.frame() %>%
+    tibble::rownames_to_column('gene_id') %>%
+    left_join(gencode, by='gene_id') %>%
+    arrange(padj)
+  
+  # assigning final arranged df to environment
+  assign(paste0(i,'arr'), rdf_arr, envir=resn_env)
+  
+  print(paste0(i,'arr'))
+  
+}
+
+escastad = list()
+
+count=1
+for (i in ls(resn_env)){
+  # print(i)
+  cancer = unlist(strsplit(x=i, split='[.]|_'))[1]
+  print(cancer)
+  rdf = get(i, envir = resn_env)
+  
+  rdf = rdf %>% mutate(cancer = cancer)
+  
+  escastad[[count]] = rdf
+  count=count+1
+}
+
+# this is the final df with all statistically significant results from the deseq
+escastad = do.call(rbind, escastad)
+```
+
+```{r escastad_normalvstumor}
+escastad %>% filter(cancer %in% c('esca', 'stad'), padj < 0.05, abs(log2FoldChange) > 1.5) %>% group_by(cancer) %>% summarise(count=n())
+escastad %>% filter(cancer == 'esca') %>% arrange(padj)
+
+# allDESeqresults_fin = read.csv('/Users/admin/Documents/Harvard/BST281/homework/finalproject/data/allDESeqresults_fin.csv')
+test = allDESeqresults_fin %>% select(-X) %>% filter(cancer %in% c('esca', 'stad'), padj < 0.05, abs(log2FoldChange) > 1.5) %>% mutate(search = paste0(gene_name,'_',cancer))#%>% group_by(cancer) %>% summarise(count=n())
+goi = unlist(test$search)
+
+foo = escastad %>% mutate(search = paste0(gene_name,'_',cancer)) %>% filter(search %in% goi)
+# write.csv(foo, file='/Users/admin/Documents/Harvard/BST281/homework/finalproject/data/normalvstumor_degenes.csv')
+read.csv(file='/Users/admin/Documents/Harvard/BST281/homework/finalproject/data/normalvstumor_degenes.csv') %>% select(-X) %>%
+  # filter(padj < 0.05)
+  arrange(padj)
+```
+
+
+```{r chqc_ttest}
+library(dplyr)
+library(edgeR)
+
+cancer = 'esca'
+# cancer = 'esca'
+# esca expression
+expr = read.table(paste0(file='/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/merged_rna/merged_rna_',cancer,'.tsv'), header=T, row.names = 1)
+cpm = log2(cpm(expr) + 1)
+# remove genes with low counts, like Camila's paper
+foo = rowSums(cpm >= 1) >= ceiling(ncol(cpm)/2)
+## final list of non-Y chrom genes with high enough counts to use ##
+genes_keep = cpm[foo,] %>% rownames()
+  
+# esca clinical (gender)
+clin = read.delim(paste0('/Users/admin/Documents/Harvard/BST281/homework/finalproject/BST281-Project/data/metadata/metadata.files_',cancer,'.txt'), header=T) %>%
+  dplyr::select(one_of(c('cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id', 'cases.0.demographic.gender', 'cases.0.disease_type', 'cases.0.project.project_id','cases.0.samples.0.sample_type'))) %>%
+  filter(cases.0.demographic.gender %in% c('female', 'male')) %>%
+  filter(cases.0.samples.0.sample_type != 'Solid Tissue Normal') %>%
+  rename('gender'=cases.0.demographic.gender) %>%
+  mutate('sample'=gsub('-', '.', cases.0.samples.0.portions.0.analytes.0.aliquots.0.submitter_id))
+# samples with gender annotations to keep
+samples_keep = unlist(clin$sample)
+
+# expression data with gender annotations
+expr = expr %>%
+  tibble::rownames_to_column('gene') %>%
+  filter(gene %in% genes_keep) %>% select(one_of('gene', samples_keep)) %>%
+  tibble::column_to_rownames('gene')
+
+# list of male and female samples to filter with
+males = filter(clin, gender=='male')$sample
+females = filter(clin, gender=='female')$sample
+# expression of male and female samples
+m = expr %>% select(one_of(males)) 
+f = expr %>% select(one_of(females)) 
+
+# making sure that everything is the same between genders for ttest
+length(rownames(f))
+sum(rownames(f) == rownames(m))
+
+# list to store ttest tstatistics
+tstats = list()
+# loop iterating through rows (genes) for ttest
+for (i in 1:length(rownames(m))){
+  # if(i>50){break}
+  males = m[i,]
+  females = f[i,]
+  ttest = t.test(males, females)
+  print(i)
+  tstats[[i]] = c(unname(ttest$statistic), unname(ttest$p.value), rownames(esca_m)[i], cancer)
+}
+# bind it all into a df
+test = do.call(rbind, tstats) %>% as.data.frame()
+# more informative names 
+colnames(test) = c('tstat', 'pval','gene_id', 'cancer')
+
+# chromosome information
+# gencode = read.delim('BST281-Project/gencode.v22.genes.txt') %>% select(seqname, gene_id, gene_name)
+# Ygenes = gencode %>% dplyr::filter(seqname=='chrY')
+ttest = inner_join(test, gencode, by='gene_id')
+ttest %>% arrange(desc(tstat))
+# ttest %>% filter(seqname =='chrY') %>% length()
+
+```
